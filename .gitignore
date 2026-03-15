@@ -28,3 +28,6 @@ data/ctb.db
 
 # Claude Code local settings
 .claude/
+
+# Personal learning prompts
+phase4_claude_code_prompt.md
