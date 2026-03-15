@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Cook The Book v0.1</title>
+</head>
+<body>
+  <h1>Cook The Book v0.1 &mdash; Spread Trend Runner</h1>
+
+  <!--
+    The form collects spread_min and spread_max.
+    These are SIGNED values matching home_spread in the database.
+    Example: -10 to -3 = "home team favored by 3 to 10 points"
+  -->
+  <form id="trend-form">
+    <!--
+      Each spread control is a <select> dropdown with step buttons.
+      The dropdown lets you pick any value from -17 to +17 (half-point steps).
+      The - / + buttons step by 0.5, same as the old number input arrows.
+    -->
+    <label for="spread-min">Spread Min:</label>
+    <button type="button" onclick="stepSelect('spread-min', -0.5)">-</button>
+    <select id="spread-min" required></select>
+    <button type="button" onclick="stepSelect('spread-min', 0.5)">+</button>
+    <br><br>
+    <label for="spread-max">Spread Max:</label>
+    <button type="button" onclick="stepSelect('spread-max', -0.5)">-</button>
+    <select id="spread-max" required></select>
+    <button type="button" onclick="stepSelect('spread-max', 0.5)">+</button>
+    <br><br>
+    <button type="submit">Run Trend</button>
+  </form>
+
+  <!-- Results appear here after the fetch call -->
+  <div id="results"></div>
+
+  <script>
+    // -----------------------------------------------------------------------
+    // SPREAD PICKER — dropdown + step buttons
+    // -----------------------------------------------------------------------
+
+    // Build spread values: -17 to +17 in 0.5 steps.
+    // This covers every realistic NFL spread.
+    const spreadValues = [];
+    for (let v = -17; v <= 17; v += 0.5) {
+      spreadValues.push(v);
+    }
+
+    // Fill a <select> with <option> elements and pick the default.
+    function populateSelect(selectId, defaultValue) {
+      const sel = document.getElementById(selectId);
+      for (const v of spreadValues) {
+        const opt = document.createElement("option");
+        opt.value = v;
+        opt.textContent = v;
+        if (v === defaultValue) opt.selected = true;
+        sel.appendChild(opt);
+      }
+    }
+
+    // Step the selected value up or down by `delta` (typically +/- 0.5).
+    // If already at the edge (-17 or +17), do nothing.
+    function stepSelect(selectId, delta) {
+      const sel = document.getElementById(selectId);
+      const currentIndex = sel.selectedIndex;
+      const newIndex = currentIndex + (delta > 0 ? 1 : -1);
+      // Clamp to valid range: can't go below 0 or above the last option.
+      if (newIndex >= 0 && newIndex < sel.options.length) {
+        sel.selectedIndex = newIndex;
+      }
+    }
+
+    // Populate both dropdowns with defaults matching Phase 1.
+    populateSelect("spread-min", -10);
+    populateSelect("spread-max", -1);
+
+    // -----------------------------------------------------------------------
+    // FORM SUBMISSION — uses fetch() to POST JSON, no page reload
+    // -----------------------------------------------------------------------
+    document.getElementById("trend-form").addEventListener("submit", async (e) => {
+      e.preventDefault();  // Stop the browser from doing a normal form POST
+
+      const spreadMin = parseFloat(document.getElementById("spread-min").value);
+      const spreadMax = parseFloat(document.getElementById("spread-max").value);
+
+      // POST JSON to the API endpoint
+      const res = await fetch("/api/run-trend", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ spread_min: spreadMin, spread_max: spreadMax })
+      });
+
+      const data = await res.json();
+
+      // If the server returned an error, show it
+      if (data.error) {
+        document.getElementById("results").innerHTML =
+          "<p style='color:red;'>" + data.error + "</p>";
+        return;
+      }
+
+      // -----------------------------------------------------------------------
+      // RENDER RESULTS — intentionally plain HTML, no framework
+      // -----------------------------------------------------------------------
+      let html = "<h2>Results</h2>";
+      html += "<ul>";
+      html += "<li><strong>Matching games (n):</strong> " + data.n + "</li>";
+      html += "<li><strong>Covers:</strong> " + data.covers + "</li>";
+      html += "<li><strong>Pushes:</strong> " + data.pushes + "</li>";
+      html += "<li><strong>No Covers:</strong> " + data.no_covers + "</li>";
+      html += "<li><strong>Hit Rate:</strong> " + (data.hit_rate * 100).toFixed(1) + "%</li>";
+      html += "</ul>";
+
+      // Last 10 table
+      if (data.last_10.length > 0) {
+        html += "<h3>Last 10 Matches (CSV order)</h3>";
+        html += "<table border='1' cellpadding='4'>";
+        html += "<tr><th>Season</th><th>Week</th><th>Home</th><th>Away</th>"
+              + "<th>Home Score</th><th>Away Score</th><th>Home Spread</th>"
+              + "<th>ATS Result</th></tr>";
+
+        for (const g of data.last_10) {
+          // Recompute ATS result client-side for display
+          // (We could also send it from the server, but this keeps the
+          //  API response matching the spec exactly.)
+          const margin = g.home_score - g.away_score;
+          const ats = margin + g.home_spread;
+          let atsLabel = "NO COVER";
+          if (ats > 0) atsLabel = "COVER";
+          else if (ats === 0) atsLabel = "PUSH";
+
+          html += "<tr>"
+                + "<td>" + g.season + "</td>"
+                + "<td>" + g.week + "</td>"
+                + "<td>" + g.home_team + "</td>"
+                + "<td>" + g.away_team + "</td>"
+                + "<td>" + g.home_score + "</td>"
+                + "<td>" + g.away_score + "</td>"
+                + "<td>" + g.home_spread + "</td>"
+                + "<td>" + atsLabel + "</td>"
+                + "</tr>";
+        }
+        html += "</table>";
+      }
+
+      document.getElementById("results").innerHTML = html;
+    });
+  </script>
+</body>
+</html>

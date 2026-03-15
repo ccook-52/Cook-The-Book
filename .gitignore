@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.pyc
+
+# Virtual environment
+venv/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Large data files (downloaded, not committed)
+# The sample CSV (nfl_games_sample.csv) IS committed for testing.
+data/nfl_games.csv
+
+# SQLite database (regenerated on server via import_games.py)
+data/ctb.db
+
+# SSH keys
+*.pem
+
+# Claude Code local settings
+.claude/
