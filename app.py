@@ -76,46 +76,132 @@ def index():
     return render_template("index.html")
 
 
+# ---------------------------------------------------------------------------
+# VALID VALUES — Phase 6 whitelists for optional filters
+# ---------------------------------------------------------------------------
+
+# All 32 current NFL team abbreviations (nflverse format).
+# Used to validate the team filter — rejects typos before they hit the DB.
+# frozenset = an immutable set.  Faster lookup than a list, can't be modified.
+VALID_TEAMS = frozenset({
+    "ARI", "ATL", "BAL", "BUF", "CAR", "CHI", "CIN", "CLE",
+    "DAL", "DEN", "DET", "GB",  "HOU", "IND", "JAX", "KC",
+    "LAC", "LAR", "LV",  "MIA", "MIN", "NE",  "NO",  "NYG",
+    "NYJ", "PHI", "PIT", "SEA", "SF",  "TB",  "TEN", "WAS",
+    # Historic abbreviations that appear in our 1999-2025 data.
+    # Teams relocated or rebranded — nflverse uses these for older seasons.
+    "OAK", "SD",  "STL",
+})
+
+# nflverse game_type values (5 total, not just REG/POST).
+VALID_GAME_TYPES = frozenset({"REG", "WC", "DIV", "CON", "SB"})
+
+
 @app.route("/api/run-trend", methods=["POST"])
 def api_run_trend():
     """
     Accept a JSON body like:
       { "spread_min": -10, "spread_max": -3 }
 
+    Phase 6 — optional filters can be added:
+      { "spread_min": -10, "spread_max": -3,
+        "team": "KC", "season_min": 2020, "season_max": 2024,
+        "week_min": 1, "week_max": 9, "game_type": "REG" }
+
+    All new fields are optional.  If omitted or empty, the filter is skipped.
+    The app works exactly as before if only spread_min/spread_max are sent.
+
     Return JSON:
       { "n": ..., "covers": ..., "pushes": ..., "no_covers": ...,
         "hit_rate": ..., "last_10": [...] }
-
-    Why POST?  We're sending structured parameters.  GET with query strings
-    would work too, but POST + JSON is cleaner for future expansion.
     """
-    # --- Parse and validate input ---
-    # Validation is a GATE: reject bad input before it reaches run_trend().
-    # Every error returns HTTP 400 (caller's fault) with a JSON body.
-    # silent=True tells Flask not to throw a 400 if the JSON is malformed —
-    # instead it returns None, and we handle it cleanly below.
+    # --- Parse JSON body ---
     data = request.get_json(silent=True)
 
-    # Check 1: Is there a JSON body at all? (covers missing body AND malformed JSON)
     if not data:
         return jsonify({"error": "Request body must be JSON", "status": 400}), 400
 
-    # Check 2: Are both fields present and numeric?
+    # --- REQUIRED: spread range (unchanged from Phase 3) ---
     try:
         spread_min = float(data["spread_min"])
         spread_max = float(data["spread_max"])
     except (KeyError, ValueError, TypeError):
         return jsonify({"error": "spread_min and spread_max are required (numbers)", "status": 400}), 400
 
-    # Check 3: Is the range valid?
     if spread_min > spread_max:
         return jsonify({"error": "spread_min must be <= spread_max", "status": 400}), 400
 
-    # --- Run the trend logic (all the real work happens here) ---
-    # Phase 3: catch RuntimeError from trend_runner if the DB fails.
-    # 400 errors (bad input) are handled above.  This catches 500 errors (our fault).
+    # --- OPTIONAL: team ---
+    # data.get() returns None if the key is missing — no KeyError.
+    # .strip() removes whitespace, .upper() normalizes case ("kc" → "KC").
+    # Empty string after strip → treat as "no filter" (None).
+    team = None
+    raw_team = data.get("team")
+    if raw_team and str(raw_team).strip():
+        team = str(raw_team).strip().upper()
+        if team not in VALID_TEAMS:
+            return jsonify({"error": f"Invalid team: {team}", "status": 400}), 400
+
+    # --- OPTIONAL: season range ---
+    # Both must be provided together, or neither.  One without the other is a 400.
+    season_min = None
+    season_max = None
+    raw_smin = data.get("season_min")
+    raw_smax = data.get("season_max")
+    # Check if either is provided (not None and not empty string).
+    has_smin = raw_smin is not None and str(raw_smin).strip() != ""
+    has_smax = raw_smax is not None and str(raw_smax).strip() != ""
+
+    if has_smin or has_smax:
+        # If one is provided, both must be.
+        if not (has_smin and has_smax):
+            return jsonify({"error": "season_min and season_max must be provided together", "status": 400}), 400
+        try:
+            season_min = int(raw_smin)
+            season_max = int(raw_smax)
+        except (ValueError, TypeError):
+            return jsonify({"error": "season_min and season_max must be integers", "status": 400}), 400
+        if season_min > season_max:
+            return jsonify({"error": "season_min must be <= season_max", "status": 400}), 400
+
+    # --- OPTIONAL: week range ---
+    # Same pattern as season range: both or neither.
+    week_min = None
+    week_max = None
+    raw_wmin = data.get("week_min")
+    raw_wmax = data.get("week_max")
+    has_wmin = raw_wmin is not None and str(raw_wmin).strip() != ""
+    has_wmax = raw_wmax is not None and str(raw_wmax).strip() != ""
+
+    if has_wmin or has_wmax:
+        if not (has_wmin and has_wmax):
+            return jsonify({"error": "week_min and week_max must be provided together", "status": 400}), 400
+        try:
+            week_min = int(raw_wmin)
+            week_max = int(raw_wmax)
+        except (ValueError, TypeError):
+            return jsonify({"error": "week_min and week_max must be integers", "status": 400}), 400
+        if week_min > week_max:
+            return jsonify({"error": "week_min must be <= week_max", "status": 400}), 400
+
+    # --- OPTIONAL: game type ---
+    game_type = None
+    raw_gt = data.get("game_type")
+    if raw_gt and str(raw_gt).strip():
+        game_type = str(raw_gt).strip().upper()
+        if game_type not in VALID_GAME_TYPES:
+            return jsonify({"error": f"Invalid game_type: {game_type}. Must be REG, WC, DIV, CON, or SB", "status": 400}), 400
+
+    # --- Run the trend logic ---
+    # Phase 6: pass all filters (optional ones are None if not provided).
+    # run_trend() ignores None filters — the query is identical to Phase 5
+    # if no optional filters are sent.
     try:
-        result = run_trend(DB_PATH, spread_min, spread_max)
+        result = run_trend(
+            DB_PATH, spread_min, spread_max,
+            team=team, season_min=season_min, season_max=season_max,
+            week_min=week_min, week_max=week_max, game_type=game_type,
+        )
     except RuntimeError:
         return jsonify({"error": "internal server error", "status": 500}), 500
 

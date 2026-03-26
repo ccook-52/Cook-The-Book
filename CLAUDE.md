@@ -1,4 +1,4 @@
-# CLAUDE.md — Cook-The-Book_v0.1
+# CLAUDE.md — Cook-The-Book
 
 This document defines architectural constraints and expectations for Claude while assisting development.
 
@@ -8,9 +8,9 @@ Claude must follow this strictly unless explicitly told otherwise.
 
 # Project Identity
 
-Cook-The-Book_v0.1 is:
+Cook-The-Book is:
 
-A minimal trend evaluation engine for team-level spread betting.
+A multi-filter trend evaluation engine for NFL spread betting.
 
 It is NOT:
 - A data ingestion platform
@@ -30,7 +30,7 @@ Data flow (locked, do not regress):
 CSV (disk)
 → import_games.py (run once, standalone script)
 → games table in data/ctb.db
-→ sqlite3 query via run_trend(db_path, spread_min, spread_max)
+→ sqlite3 query via run_trend(db_path, spread_min, spread_max, **optional_filters)
 → JSON response
 → Client-side render
 
@@ -38,10 +38,11 @@ The app does not load CSV at startup.
 The app does not hold a GAMES list in RAM.
 All game queries go through sqlite3. No ORM. No SQLAlchemy.
 
-games table schema (locked):
+games table schema (Phase 6 — expanded):
   id          INTEGER PRIMARY KEY
   season      INTEGER NOT NULL
   week        INTEGER NOT NULL
+  game_type   TEXT    NOT NULL   ← REG, WC, DIV, CON, SB
   home_team   TEXT    NOT NULL
   away_team   TEXT    NOT NULL
   home_score  INTEGER NOT NULL
@@ -63,46 +64,62 @@ Phase 3 hardened the app without changing behavior (locked, do not regress):
 
 ---
 
-# Current Phase: Phase 4 — Deploy (Lightsail + Nginx + DNS)
+# Established: Deploy (Phase 4 — Complete)
 
-Phase 4 deploys CTB to an AWS Lightsail instance. No new features. No code changes to app.py or trend_runner.py.
-The goal is: the app is reachable from the internet at http://cookthebook.net.
+Phase 4 deployed CTB to AWS Lightsail (locked, do not regress):
 
-Rules for this phase:
-
-Deployment stack:
-- AWS Lightsail instance: Ubuntu 22.04, us-east-1, $3.50-5/mo plan
+- AWS Lightsail: Ubuntu 22.04, us-east-1, static IP 44.218.123.69
 - Gunicorn replaces app.run() — app:app --bind 127.0.0.1:8000 --workers 2
-- Nginx reverse proxy: port 80 → Gunicorn port 8000
-- systemd service keeps Gunicorn alive (auto-start on boot, auto-restart on crash)
-- Static IP attached to the Lightsail instance
-
-Code transport:
-- GitHub repo as single source of truth
-- git clone on server for initial deploy
-- git pull + systemctl restart ctb for updates
-
-DNS:
-- GoDaddy domain: cookthebook.net
-- A record pointed to Lightsail static IP
-- Nginx server_name: cookthebook.net
-
-Security:
+- Nginx reverse proxy: port 80 → Gunicorn port 8000, server_name cookthebook.net
+- systemd service (ctb.service) keeps Gunicorn alive (auto-start, auto-restart)
+- GitHub repo (ccook-52/Cook-The-Book, branch: master) as single source of truth
+- Deploy workflow: git push → SSH → git pull → sudo systemctl restart ctb
+- GoDaddy A record: cookthebook.net → 44.218.123.69
 - Lightsail firewall: port 80 open to all, port 22 open to deployer's IP only
 - Port 5000 and 8000 are NOT exposed to the internet
 - Gunicorn binds to 127.0.0.1 (localhost only), NOT 0.0.0.0
 - .pem key file is never committed to git
+- Live at: http://cookthebook.net
 
-Code changes:
-- Only change: add gunicorn to requirements.txt
-- No changes to app.py, trend_runner.py, import_games.py, or templates
-- data/ctb.db is regenerated on server via import_games.py (or copied)
+---
 
-Non-goals (Phase 4):
-- No HTTPS/TLS certificates (Phase 5 — Let's Encrypt)
-- No Docker or containers
-- No CI/CD pipeline
-- No auto-scaling or load balancing
+# Established: HTTPS (Phase 5 — Complete)
+
+Phase 5 added HTTPS via Let's Encrypt + Certbot (locked, do not regress):
+
+- Certbot with Nginx plugin auto-configured SSL directives
+- Certificate: /etc/letsencrypt/live/cookthebook.net/fullchain.pem (expires June 13, 2026)
+- Auto-renewal via certbot.timer (systemd), dry-run verified
+- Nginx: port 443 SSL with TLS termination, port 80 redirects to HTTPS (301)
+- Lightsail firewall: port 443 added (open to all)
+- Port 80 stays open (needed for HTTP-01 challenge renewal + redirect)
+- Gunicorn unchanged: 127.0.0.1:8000, systemd service unchanged
+- Zero changes to app.py, trend_runner.py, import_games.py, or templates
+- Live at: https://cookthebook.net
+
+---
+
+# Established: Expanded Filters (Phase 6 — Complete)
+
+Phase 6 expanded CTB from a one-trick tool into a multi-filter trend engine:
+
+- games table expanded: added game_type column (REG, WC, DIV, CON, SB)
+- import_games.py updated to import game_type from nflverse CSV
+- trend_runner.py: dynamic SQL WHERE clause construction with parameterized queries
+  - _build_query() assembles clauses/params from optional filters
+  - Spread range remains REQUIRED; all new filters are OPTIONAL
+  - f-string builds SQL skeleton only; user values go through ? placeholders
+- Four optional filters: team, season range, week range, game type
+  - Team filter (Option B): shows all games involving team (home + away)
+  - ATS math flips for away perspective: margin = away_score - home_score, spread negated
+- app.py validation: VALID_TEAMS (35 teams), VALID_GAME_TYPES (5 types)
+  - Optional fields: absent/empty → None (skip), present → validate → pass through
+  - Range filters require both bounds (season_min + season_max, week_min + week_max)
+- index.html: progressive disclosure (Advanced Filters toggle)
+  - Team dropdown, season range, week range, game type dropdown
+  - ATS display in last_10 accounts for team perspective flip
+- Regression verified: spread -10 to -3 with no filters → n=3370, hit_rate=0.478
+- GitHub repo renamed: ccook-52/Cook-The-Book (was Cook-The-Book_v0.1)
 
 ---
 
@@ -131,13 +148,17 @@ No ambiguity.
 
 # ATS Math Contract
 
-home_margin = home_score - away_score
+Home perspective (default):
+  home_margin = home_score - away_score
+  ats_value = home_margin + home_spread
 
-ats_value = home_margin + home_spread
+Away perspective (Phase 6 — when team filter selects an away team):
+  away_margin = away_score - home_score
+  ats_value = away_margin + (-home_spread)
 
-if ats_value > 0 → cover  
-if ats_value == 0 → push  
-if ats_value < 0 → no_cover  
+if ats_value > 0 → cover
+if ats_value == 0 → push
+if ats_value < 0 → no_cover
 
 hit_rate = covers / (covers + no_covers)
 
@@ -214,6 +235,6 @@ Claude should not:
 
 # North Star
 
-Cook-The-Book_v0.1 is a spine.
+Cook-The-Book is a spine.
 
 It must remain clean, minimal, and conceptually tight.

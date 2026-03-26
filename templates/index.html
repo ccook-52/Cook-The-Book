@@ -4,31 +4,131 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Cook The Book v0.1</title>
+  <style>
+    /*
+      Phase 6: minimal CSS to make the form readable on mobile.
+      No framework — just enough to not look broken on a phone.
+    */
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      max-width: 720px;
+      margin: 0 auto;
+      padding: 16px;
+    }
+    /* Each filter row: label on the left, controls on the right */
+    .filter-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 12px;
+      flex-wrap: wrap;
+    }
+    .filter-row label {
+      min-width: 110px;
+      font-weight: bold;
+    }
+    select { padding: 4px; }
+    button { padding: 4px 10px; cursor: pointer; }
+    /* The advanced filters panel — hidden by default */
+    #advanced-filters {
+      display: none;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      padding: 12px;
+      margin: 12px 0;
+      background: #f9f9f9;
+    }
+    #advanced-filters.open { display: block; }
+    #toggle-advanced { margin-bottom: 12px; }
+    /* Results table */
+    table { border-collapse: collapse; width: 100%; margin-top: 8px; }
+    th, td { border: 1px solid #999; padding: 4px 8px; text-align: center; }
+    th { background: #eee; }
+  </style>
 </head>
 <body>
-  <h1>Cook The Book v0.1 &mdash; Spread Trend Runner</h1>
+  <h1>Cook The Book v0.1</h1>
 
-  <!--
-    The form collects spread_min and spread_max.
-    These are SIGNED values matching home_spread in the database.
-    Example: -10 to -3 = "home team favored by 3 to 10 points"
-  -->
   <form id="trend-form">
     <!--
-      Each spread control is a <select> dropdown with step buttons.
-      The dropdown lets you pick any value from -17 to +17 (half-point steps).
-      The - / + buttons step by 0.5, same as the old number input arrows.
+      REQUIRED: Spread range — unchanged from Phase 2.
+      These are SIGNED values matching home_spread in the database.
+      Example: -10 to -3 = "home team favored by 3 to 10 points"
     -->
-    <label for="spread-min">Spread Min:</label>
-    <button type="button" onclick="stepSelect('spread-min', -0.5)">-</button>
-    <select id="spread-min" required></select>
-    <button type="button" onclick="stepSelect('spread-min', 0.5)">+</button>
-    <br><br>
-    <label for="spread-max">Spread Max:</label>
-    <button type="button" onclick="stepSelect('spread-max', -0.5)">-</button>
-    <select id="spread-max" required></select>
-    <button type="button" onclick="stepSelect('spread-max', 0.5)">+</button>
-    <br><br>
+    <div class="filter-row">
+      <label for="spread-min">Spread Min:</label>
+      <button type="button" onclick="stepSelect('spread-min', -0.5)">-</button>
+      <select id="spread-min" required></select>
+      <button type="button" onclick="stepSelect('spread-min', 0.5)">+</button>
+    </div>
+    <div class="filter-row">
+      <label for="spread-max">Spread Max:</label>
+      <button type="button" onclick="stepSelect('spread-max', -0.5)">-</button>
+      <select id="spread-max" required></select>
+      <button type="button" onclick="stepSelect('spread-max', 0.5)">+</button>
+    </div>
+
+    <!--
+      Phase 6: Advanced filters toggle.
+      Progressive disclosure — the page loads clean with just the spread picker.
+      Click "Advanced Filters" to reveal team, season, week, and game type controls.
+      This keeps the UI simple for casual users while giving power users more options.
+    -->
+    <button type="button" id="toggle-advanced" onclick="toggleAdvanced()">
+      Advanced Filters &#9660;
+    </button>
+
+    <div id="advanced-filters">
+      <!--
+        OPTIONAL: Team dropdown.
+        "Any" = no team filter (sends empty string, server treats as None).
+        Teams sorted alphabetically.  Includes OAK/SD/STL for historic games.
+      -->
+      <div class="filter-row">
+        <label for="team">Team:</label>
+        <select id="team"></select>
+      </div>
+
+      <!--
+        OPTIONAL: Season range.
+        "Any" in either dropdown = no season filter.
+        Both must be set or neither — the UI sends empty strings for "Any".
+      -->
+      <div class="filter-row">
+        <label for="season-min">Season:</label>
+        <select id="season-min"></select>
+        <span>to</span>
+        <select id="season-max"></select>
+      </div>
+
+      <!--
+        OPTIONAL: Week range.
+        Weeks 1-22 cover regular season (1-18) and playoffs (19-22 in nflverse).
+      -->
+      <div class="filter-row">
+        <label for="week-min">Week:</label>
+        <select id="week-min"></select>
+        <span>to</span>
+        <select id="week-max"></select>
+      </div>
+
+      <!--
+        OPTIONAL: Game type.
+        REG = regular season, WC/DIV/CON/SB = playoff rounds.
+      -->
+      <div class="filter-row">
+        <label for="game-type">Game Type:</label>
+        <select id="game-type">
+          <option value="">Any</option>
+          <option value="REG">Regular Season</option>
+          <option value="WC">Wild Card</option>
+          <option value="DIV">Divisional</option>
+          <option value="CON">Conference Championship</option>
+          <option value="SB">Super Bowl</option>
+        </select>
+      </div>
+    </div>
+
     <button type="submit">Run Trend</button>
   </form>
 
@@ -37,17 +137,14 @@
 
   <script>
     // -----------------------------------------------------------------------
-    // SPREAD PICKER — dropdown + step buttons
+    // SPREAD PICKER — dropdown + step buttons (unchanged from Phase 2)
     // -----------------------------------------------------------------------
 
-    // Build spread values: -17 to +17 in 0.5 steps.
-    // This covers every realistic NFL spread.
     const spreadValues = [];
     for (let v = -17; v <= 17; v += 0.5) {
       spreadValues.push(v);
     }
 
-    // Fill a <select> with <option> elements and pick the default.
     function populateSelect(selectId, defaultValue) {
       const sel = document.getElementById(selectId);
       for (const v of spreadValues) {
@@ -59,41 +156,137 @@
       }
     }
 
-    // Step the selected value up or down by `delta` (typically +/- 0.5).
-    // If already at the edge (-17 or +17), do nothing.
     function stepSelect(selectId, delta) {
       const sel = document.getElementById(selectId);
       const currentIndex = sel.selectedIndex;
       const newIndex = currentIndex + (delta > 0 ? 1 : -1);
-      // Clamp to valid range: can't go below 0 or above the last option.
       if (newIndex >= 0 && newIndex < sel.options.length) {
         sel.selectedIndex = newIndex;
       }
     }
 
-    // Populate both dropdowns with defaults matching Phase 1.
     populateSelect("spread-min", -10);
     populateSelect("spread-max", -1);
+
+    // -----------------------------------------------------------------------
+    // Phase 6: ADVANCED FILTER CONTROLS
+    // -----------------------------------------------------------------------
+
+    // Toggle the advanced filters panel open/closed.
+    // The arrow character flips to indicate open/closed state.
+    function toggleAdvanced() {
+      const panel = document.getElementById("advanced-filters");
+      const btn = document.getElementById("toggle-advanced");
+      panel.classList.toggle("open");
+      // &#9660; = down arrow (closed), &#9650; = up arrow (open)
+      btn.innerHTML = panel.classList.contains("open")
+        ? "Advanced Filters &#9650;"
+        : "Advanced Filters &#9660;";
+    }
+
+    // --- Team dropdown ---
+    // All 32 current + 3 historic team abbreviations, sorted alphabetically.
+    // Must match VALID_TEAMS in app.py exactly.
+    const teams = [
+      "ARI","ATL","BAL","BUF","CAR","CHI","CIN","CLE",
+      "DAL","DEN","DET","GB","HOU","IND","JAX","KC",
+      "LAC","LAR","LV","MIA","MIN","NE","NO","NYG",
+      "NYJ","OAK","PHI","PIT","SD","SEA","SF","STL","TB","TEN","WAS"
+    ];
+    (function populateTeams() {
+      const sel = document.getElementById("team");
+      // First option: "Any" (sends empty string = no filter)
+      const any = document.createElement("option");
+      any.value = "";
+      any.textContent = "Any";
+      sel.appendChild(any);
+      for (const t of teams) {
+        const opt = document.createElement("option");
+        opt.value = t;
+        opt.textContent = t;
+        sel.appendChild(opt);
+      }
+    })();
+
+    // --- Season range dropdowns ---
+    // Our data covers 1999-2025.  "Any" = no filter.
+    (function populateSeasons() {
+      for (const id of ["season-min", "season-max"]) {
+        const sel = document.getElementById(id);
+        const any = document.createElement("option");
+        any.value = "";
+        any.textContent = "Any";
+        sel.appendChild(any);
+        // season-min: ascending (1999 first).  season-max: ascending too,
+        // but default to "Any" so the user picks explicitly.
+        for (let y = 1999; y <= 2025; y++) {
+          const opt = document.createElement("option");
+          opt.value = y;
+          opt.textContent = y;
+          sel.appendChild(opt);
+        }
+      }
+    })();
+
+    // --- Week range dropdowns ---
+    // Weeks 1-22 (regular season + playoffs in nflverse numbering).
+    (function populateWeeks() {
+      for (const id of ["week-min", "week-max"]) {
+        const sel = document.getElementById(id);
+        const any = document.createElement("option");
+        any.value = "";
+        any.textContent = "Any";
+        sel.appendChild(any);
+        for (let w = 1; w <= 22; w++) {
+          const opt = document.createElement("option");
+          opt.value = w;
+          opt.textContent = w;
+          sel.appendChild(opt);
+        }
+      }
+    })();
 
     // -----------------------------------------------------------------------
     // FORM SUBMISSION — uses fetch() to POST JSON, no page reload
     // -----------------------------------------------------------------------
     document.getElementById("trend-form").addEventListener("submit", async (e) => {
-      e.preventDefault();  // Stop the browser from doing a normal form POST
+      e.preventDefault();
 
       const spreadMin = parseFloat(document.getElementById("spread-min").value);
       const spreadMax = parseFloat(document.getElementById("spread-max").value);
 
-      // POST JSON to the API endpoint
+      // Build the request body.  Always include spread (required).
+      // Optional filters: only include if the user selected a value (not "Any").
+      // Empty strings are fine — app.py treats them as "no filter".
+      const body = {
+        spread_min: spreadMin,
+        spread_max: spreadMax,
+      };
+
+      // Phase 6: read optional filter values from the form.
+      // We always send them — app.py ignores empty strings.
+      const team = document.getElementById("team").value;
+      const seasonMin = document.getElementById("season-min").value;
+      const seasonMax = document.getElementById("season-max").value;
+      const weekMin = document.getElementById("week-min").value;
+      const weekMax = document.getElementById("week-max").value;
+      const gameType = document.getElementById("game-type").value;
+
+      if (team) body.team = team;
+      if (seasonMin) body.season_min = parseInt(seasonMin);
+      if (seasonMax) body.season_max = parseInt(seasonMax);
+      if (weekMin) body.week_min = parseInt(weekMin);
+      if (weekMax) body.week_max = parseInt(weekMax);
+      if (gameType) body.game_type = gameType;
+
       const res = await fetch("/api/run-trend", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ spread_min: spreadMin, spread_max: spreadMax })
+        body: JSON.stringify(body)
       });
 
       const data = await res.json();
 
-      // If the server returned an error, show it
       if (data.error) {
         document.getElementById("results").innerHTML =
           "<p style='color:red;'>" + data.error + "</p>";
@@ -115,17 +308,24 @@
       // Last 10 table
       if (data.last_10.length > 0) {
         html += "<h3>Last 10 Matches (CSV order)</h3>";
-        html += "<table border='1' cellpadding='4'>";
-        html += "<tr><th>Season</th><th>Week</th><th>Home</th><th>Away</th>"
-              + "<th>Home Score</th><th>Away Score</th><th>Home Spread</th>"
-              + "<th>ATS Result</th></tr>";
+        html += "<table>";
+        html += "<tr><th>Season</th><th>Wk</th><th>Type</th><th>Home</th><th>Away</th>"
+              + "<th>Score</th><th>Spread</th><th>ATS</th></tr>";
 
         for (const g of data.last_10) {
-          // Recompute ATS result client-side for display
-          // (We could also send it from the server, but this keeps the
-          //  API response matching the spec exactly.)
-          const margin = g.home_score - g.away_score;
-          const ats = margin + g.home_spread;
+          // Phase 6: ATS result must account for team perspective.
+          // If a team filter is active and the team is the away team,
+          // flip the math — same logic as trend_runner.py Step B.
+          let margin, ats;
+          if (team && g.away_team === team) {
+            // AWAY perspective
+            margin = g.away_score - g.home_score;
+            ats = margin + (-g.home_spread);
+          } else {
+            // HOME perspective (default)
+            margin = g.home_score - g.away_score;
+            ats = margin + g.home_spread;
+          }
           let atsLabel = "NO COVER";
           if (ats > 0) atsLabel = "COVER";
           else if (ats === 0) atsLabel = "PUSH";
@@ -133,10 +333,10 @@
           html += "<tr>"
                 + "<td>" + g.season + "</td>"
                 + "<td>" + g.week + "</td>"
+                + "<td>" + g.game_type + "</td>"
                 + "<td>" + g.home_team + "</td>"
                 + "<td>" + g.away_team + "</td>"
-                + "<td>" + g.home_score + "</td>"
-                + "<td>" + g.away_score + "</td>"
+                + "<td>" + g.home_score + "-" + g.away_score + "</td>"
                 + "<td>" + g.home_spread + "</td>"
                 + "<td>" + atsLabel + "</td>"
                 + "</tr>";

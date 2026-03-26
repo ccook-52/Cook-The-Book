@@ -38,11 +38,14 @@ DB_PATH = os.path.join(SCRIPT_DIR, "data", "ctb.db")
 # IF NOT EXISTS = safety net.  If you accidentally run this script twice
 # without deleting ctb.db, it won't crash — it'll skip table creation
 # and try to insert (which may cause duplicate rows, so delete first).
+#
+# Phase 6: added game_type column ("REG" or "POST") for playoff filtering.
 CREATE_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS games (
     id          INTEGER PRIMARY KEY,
     season      INTEGER NOT NULL,
     week        INTEGER NOT NULL,
+    game_type   TEXT    NOT NULL,
     home_team   TEXT    NOT NULL,
     away_team   TEXT    NOT NULL,
     home_score  INTEGER NOT NULL,
@@ -51,12 +54,12 @@ CREATE TABLE IF NOT EXISTS games (
 );
 """
 
-# Parameterized INSERT — the 7 '?' placeholders map to the 7 non-id columns.
+# Parameterized INSERT — the 8 '?' placeholders map to the 8 non-id columns.
 # We don't provide 'id' because SQLite auto-assigns it (1, 2, 3, ...).
 # NEVER use f-strings here — '?' protects against SQL injection.
 INSERT_SQL = """
-INSERT INTO games (season, week, home_team, away_team, home_score, away_score, home_spread)
-VALUES (?, ?, ?, ?, ?, ?, ?);
+INSERT INTO games (season, week, game_type, home_team, away_team, home_score, away_score, home_spread)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?);
 """
 
 
@@ -91,6 +94,9 @@ def main():
             conn.execute(INSERT_SQL, (
                 int(row["season"]),
                 int(row["week"]),
+                # Phase 6: game_type is "REG" or "POST" in nflverse.
+                # We store it as-is — no transformation needed.
+                row["game_type"].strip(),
                 row["home_team"].strip(),
                 row["away_team"].strip(),
                 int(row["home_score"]),
