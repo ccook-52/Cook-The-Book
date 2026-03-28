@@ -192,15 +192,36 @@ def api_run_trend():
         if game_type not in VALID_GAME_TYPES:
             return jsonify({"error": f"Invalid game_type: {game_type}. Must be REG, WC, DIV, CON, or SB", "status": 400}), 400
 
+    # --- OPTIONAL: total line range (Phase 7 — over/under filter) ---
+    # Same pattern as season/week: both bounds or neither.
+    total_min = None
+    total_max = None
+    raw_tmin = data.get("total_min")
+    raw_tmax = data.get("total_max")
+    has_tmin = raw_tmin is not None and str(raw_tmin).strip() != ""
+    has_tmax = raw_tmax is not None and str(raw_tmax).strip() != ""
+
+    if has_tmin or has_tmax:
+        if not (has_tmin and has_tmax):
+            return jsonify({"error": "total_min and total_max must be provided together", "status": 400}), 400
+        try:
+            total_min = float(raw_tmin)
+            total_max = float(raw_tmax)
+        except (ValueError, TypeError):
+            return jsonify({"error": "total_min and total_max must be numbers", "status": 400}), 400
+        if total_min > total_max:
+            return jsonify({"error": "total_min must be <= total_max", "status": 400}), 400
+
     # --- Run the trend logic ---
-    # Phase 6: pass all filters (optional ones are None if not provided).
-    # run_trend() ignores None filters — the query is identical to Phase 5
+    # Pass all filters (optional ones are None if not provided).
+    # run_trend() ignores None filters — the query is unchanged
     # if no optional filters are sent.
     try:
         result = run_trend(
             DB_PATH, spread_min, spread_max,
             team=team, season_min=season_min, season_max=season_max,
             week_min=week_min, week_max=week_max, game_type=game_type,
+            total_min=total_min, total_max=total_max,
         )
     except RuntimeError:
         return jsonify({"error": "internal server error", "status": 500}), 500

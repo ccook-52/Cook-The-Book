@@ -71,8 +71,8 @@
     <!--
       Phase 6: Advanced filters toggle.
       Progressive disclosure — the page loads clean with just the spread picker.
-      Click "Advanced Filters" to reveal team, season, week, and game type controls.
-      This keeps the UI simple for casual users while giving power users more options.
+      Click "Advanced Filters" to reveal team, season, week, game type,
+      and total line controls.
     -->
     <button type="button" id="toggle-advanced" onclick="toggleAdvanced()">
       Advanced Filters &#9660;
@@ -127,6 +127,19 @@
           <option value="SB">Super Bowl</option>
         </select>
       </div>
+
+      <!--
+        Phase 7: OPTIONAL: Total line range (over/under).
+        Filters by the sportsbook O/U line.
+        Example: 44 to 50 = "games where the total was set between 44 and 50"
+        "Any" = no total line filter.
+      -->
+      <div class="filter-row">
+        <label for="total-min">Total Line:</label>
+        <select id="total-min"></select>
+        <span>to</span>
+        <select id="total-max"></select>
+      </div>
     </div>
 
     <button type="submit">Run Trend</button>
@@ -173,20 +186,16 @@
     // -----------------------------------------------------------------------
 
     // Toggle the advanced filters panel open/closed.
-    // The arrow character flips to indicate open/closed state.
     function toggleAdvanced() {
       const panel = document.getElementById("advanced-filters");
       const btn = document.getElementById("toggle-advanced");
       panel.classList.toggle("open");
-      // &#9660; = down arrow (closed), &#9650; = up arrow (open)
       btn.innerHTML = panel.classList.contains("open")
         ? "Advanced Filters &#9650;"
         : "Advanced Filters &#9660;";
     }
 
     // --- Team dropdown ---
-    // All 32 current + 3 historic team abbreviations, sorted alphabetically.
-    // Must match VALID_TEAMS in app.py exactly.
     const teams = [
       "ARI","ATL","BAL","BUF","CAR","CHI","CIN","CLE",
       "DAL","DEN","DET","GB","HOU","IND","JAX","KC",
@@ -195,7 +204,6 @@
     ];
     (function populateTeams() {
       const sel = document.getElementById("team");
-      // First option: "Any" (sends empty string = no filter)
       const any = document.createElement("option");
       any.value = "";
       any.textContent = "Any";
@@ -209,7 +217,6 @@
     })();
 
     // --- Season range dropdowns ---
-    // Our data covers 1999-2025.  "Any" = no filter.
     (function populateSeasons() {
       for (const id of ["season-min", "season-max"]) {
         const sel = document.getElementById(id);
@@ -217,8 +224,6 @@
         any.value = "";
         any.textContent = "Any";
         sel.appendChild(any);
-        // season-min: ascending (1999 first).  season-max: ascending too,
-        // but default to "Any" so the user picks explicitly.
         for (let y = 1999; y <= 2025; y++) {
           const opt = document.createElement("option");
           opt.value = y;
@@ -229,7 +234,6 @@
     })();
 
     // --- Week range dropdowns ---
-    // Weeks 1-22 (regular season + playoffs in nflverse numbering).
     (function populateWeeks() {
       for (const id of ["week-min", "week-max"]) {
         const sel = document.getElementById(id);
@@ -246,6 +250,26 @@
       }
     })();
 
+    // --- Phase 7: Total line range dropdowns ---
+    // Over/under lines in our data range from 28.5 to 63.5.
+    // We use whole numbers 28 to 64 in 0.5 steps for the dropdown.
+    // "Any" = no total line filter.
+    (function populateTotals() {
+      for (const id of ["total-min", "total-max"]) {
+        const sel = document.getElementById(id);
+        const any = document.createElement("option");
+        any.value = "";
+        any.textContent = "Any";
+        sel.appendChild(any);
+        for (let t = 28; t <= 64; t += 0.5) {
+          const opt = document.createElement("option");
+          opt.value = t;
+          opt.textContent = t;
+          sel.appendChild(opt);
+        }
+      }
+    })();
+
     // -----------------------------------------------------------------------
     // FORM SUBMISSION — uses fetch() to POST JSON, no page reload
     // -----------------------------------------------------------------------
@@ -256,21 +280,21 @@
       const spreadMax = parseFloat(document.getElementById("spread-max").value);
 
       // Build the request body.  Always include spread (required).
-      // Optional filters: only include if the user selected a value (not "Any").
-      // Empty strings are fine — app.py treats them as "no filter".
       const body = {
         spread_min: spreadMin,
         spread_max: spreadMax,
       };
 
       // Phase 6: read optional filter values from the form.
-      // We always send them — app.py ignores empty strings.
       const team = document.getElementById("team").value;
       const seasonMin = document.getElementById("season-min").value;
       const seasonMax = document.getElementById("season-max").value;
       const weekMin = document.getElementById("week-min").value;
       const weekMax = document.getElementById("week-max").value;
       const gameType = document.getElementById("game-type").value;
+      // Phase 7: total line range
+      const totalMin = document.getElementById("total-min").value;
+      const totalMax = document.getElementById("total-max").value;
 
       if (team) body.team = team;
       if (seasonMin) body.season_min = parseInt(seasonMin);
@@ -278,6 +302,8 @@
       if (weekMin) body.week_min = parseInt(weekMin);
       if (weekMax) body.week_max = parseInt(weekMax);
       if (gameType) body.game_type = gameType;
+      if (totalMin) body.total_min = parseFloat(totalMin);
+      if (totalMax) body.total_max = parseFloat(totalMax);
 
       const res = await fetch("/api/run-trend", {
         method: "POST",
@@ -294,41 +320,56 @@
       }
 
       // -----------------------------------------------------------------------
-      // RENDER RESULTS — intentionally plain HTML, no framework
+      // RENDER RESULTS — ATS + O/U stats, intentionally plain HTML
       // -----------------------------------------------------------------------
       let html = "<h2>Results</h2>";
+      html += "<p><strong>Matching games (n):</strong> " + data.n + "</p>";
+
+      // ATS summary
+      html += "<h3>ATS (Against The Spread)</h3>";
       html += "<ul>";
-      html += "<li><strong>Matching games (n):</strong> " + data.n + "</li>";
       html += "<li><strong>Covers:</strong> " + data.covers + "</li>";
       html += "<li><strong>Pushes:</strong> " + data.pushes + "</li>";
       html += "<li><strong>No Covers:</strong> " + data.no_covers + "</li>";
       html += "<li><strong>Hit Rate:</strong> " + (data.hit_rate * 100).toFixed(1) + "%</li>";
       html += "</ul>";
 
-      // Last 10 table
+      // Phase 7: O/U summary
+      html += "<h3>O/U (Over/Under)</h3>";
+      html += "<ul>";
+      html += "<li><strong>Overs:</strong> " + data.overs + "</li>";
+      html += "<li><strong>Unders:</strong> " + data.unders + "</li>";
+      html += "<li><strong>Pushes:</strong> " + data.ou_pushes + "</li>";
+      html += "<li><strong>Over Rate:</strong> " + (data.ou_rate * 100).toFixed(1) + "%</li>";
+      html += "</ul>";
+
+      // Last 10 table — now includes Total and O/U columns
       if (data.last_10.length > 0) {
-        html += "<h3>Last 10 Matches (CSV order)</h3>";
+        html += "<h3>Last 10 Matches</h3>";
         html += "<table>";
         html += "<tr><th>Season</th><th>Wk</th><th>Type</th><th>Home</th><th>Away</th>"
-              + "<th>Score</th><th>Spread</th><th>ATS</th></tr>";
+              + "<th>Score</th><th>Spread</th><th>ATS</th>"
+              + "<th>Total</th><th>O/U</th></tr>";
 
         for (const g of data.last_10) {
-          // Phase 6: ATS result must account for team perspective.
-          // If a team filter is active and the team is the away team,
-          // flip the math — same logic as trend_runner.py Step B.
-          let margin, ats;
+          // ATS result — accounts for team perspective (Phase 6).
+          let ats;
           if (team && g.away_team === team) {
-            // AWAY perspective
-            margin = g.away_score - g.home_score;
-            ats = margin + (-g.home_spread);
+            ats = -g.result + (-g.home_spread);
           } else {
-            // HOME perspective (default)
-            margin = g.home_score - g.away_score;
-            ats = margin + g.home_spread;
+            ats = g.result + g.home_spread;
           }
           let atsLabel = "NO COVER";
           if (ats > 0) atsLabel = "COVER";
           else if (ats === 0) atsLabel = "PUSH";
+
+          // Phase 7: O/U result for this game.
+          // actual_total = combined score, ou_value = how much it exceeded the line.
+          const actualTotal = g.home_score + g.away_score;
+          const ouValue = actualTotal - g.total_line;
+          let ouLabel = "UNDER";
+          if (ouValue > 0) ouLabel = "OVER";
+          else if (ouValue === 0) ouLabel = "PUSH";
 
           html += "<tr>"
                 + "<td>" + g.season + "</td>"
@@ -339,6 +380,8 @@
                 + "<td>" + g.home_score + "-" + g.away_score + "</td>"
                 + "<td>" + g.home_spread + "</td>"
                 + "<td>" + atsLabel + "</td>"
+                + "<td>" + g.total_line + "</td>"
+                + "<td>" + ouLabel + "</td>"
                 + "</tr>";
         }
         html += "</table>";

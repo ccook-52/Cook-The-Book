@@ -8,8 +8,11 @@ Phase 6: Expanded to support optional filters (team, season, week, game_type).
   The SQL query is now built dynamically — clauses are appended only when
   the caller provides a filter.  Spread range is still REQUIRED.
 
+Phase 7: Added total_line filter and over/under classification.
+  O/U is computed alongside ATS for every query — both results returned.
+
 Phase 1's load_games() is gone.  The CSV is no longer read at runtime.
-Data lives in data/ctb.db, populated by import_games.py (run once).
+Data lives in data/ctb.db, populated by refresh_data.py (or import_games.py as fallback).
 
 It has ZERO knowledge of Flask, routes, or HTTP.
 That separation is intentional (see CLAUDE.md: Architecture Rules).
@@ -46,7 +49,9 @@ _COLUMNS = (
 
 def _build_query(spread_min, spread_max, team=None,
                  season_min=None, season_max=None,
-                 week_min=None, week_max=None, game_type=None):
+                 week_min=None, week_max=None,
+                 game_type=None,
+                 total_min=None, total_max=None):
     """
     Build a SELECT query with dynamic WHERE clauses.
 
@@ -82,6 +87,13 @@ def _build_query(spread_min, spread_max, team=None,
         clauses.append("game_type = ?")
         params.append(game_type)
 
+    # --- Optional: total line range (Phase 7) ---
+    # Filters by the sportsbook over/under line (e.g., 44 to 50).
+    # This narrows to games in a specific scoring environment.
+    if total_min is not None and total_max is not None:
+        clauses.append("total_line BETWEEN ? AND ?")
+        params.extend([total_min, total_max])
+
     # --- Assemble ---
     # " AND ".join turns ["A", "B", "C"] into "A AND B AND C".
     where = " AND ".join(clauses)
@@ -98,10 +110,11 @@ def _build_query(spread_min, spread_max, team=None,
 def run_trend(db_path: str, spread_min: float, spread_max: float,
               team: str = None, season_min: int = None, season_max: int = None,
               week_min: int = None, week_max: int = None,
-              game_type: str = None) -> dict:
+              game_type: str = None,
+              total_min: float = None, total_max: float = None) -> dict:
     """
     Query games from SQLite by spread range + optional filters,
-    compute ATS stats, return results.
+    compute ATS and O/U stats, return results.
 
     Parameters:
       db_path     — path to the SQLite database (data/ctb.db)
@@ -113,6 +126,8 @@ def run_trend(db_path: str, spread_min: float, spread_max: float,
       week_min    — first week to include, e.g. 1                  [optional]
       week_max    — last week to include, e.g. 18                  [optional]
       game_type   — "REG", "WC", "DIV", "CON", or "SB"            [optional]
+      total_min   — lower bound of total_line (e.g. 40.0)          [optional]
+      total_max   — upper bound of total_line (e.g. 50.0)          [optional]
 
     Sign convention (from CLAUDE.md):
       home_spread is negative when home team is favored.
@@ -121,17 +136,25 @@ def run_trend(db_path: str, spread_min: float, spread_max: float,
     Phase 6 — team filter (Option B):
       When a team is selected, results include games where the team is home
       AND games where the team is away.  ATS math flips for away games:
-        away perspective:  margin = away_score - home_score
-                           ats_value = margin + (-home_spread)
-      This gives the bettor the team's ATS record from THEIR perspective.
+        away perspective:  ats_value = -result + (-home_spread)
+
+    Phase 7 — over/under:
+      actual_total = home_score + away_score
+      ou_value = actual_total - total_line
+      ou_value > 0 → over, == 0 → push, < 0 → under
+      O/U stats are always computed alongside ATS.
 
     Returns dict:
       {
         "n":         int,   — total matching games
-        "covers":    int,
-        "pushes":    int,
-        "no_covers": int,
-        "hit_rate":  float, — covers / (covers + no_covers), pushes excluded
+        "covers":    int,   — ATS covers
+        "pushes":    int,   — ATS pushes
+        "no_covers": int,   — ATS no-covers
+        "hit_rate":  float, — covers / (covers + no_covers)
+        "overs":     int,   — O/U overs
+        "unders":    int,   — O/U unders
+        "ou_pushes": int,   — O/U pushes
+        "ou_rate":   float, — overs / (overs + unders)
         "last_10":   list   — last 10 matches in DB insertion order
       }
     """
@@ -141,6 +164,7 @@ def run_trend(db_path: str, spread_min: float, spread_max: float,
         spread_min, spread_max,
         team=team, season_min=season_min, season_max=season_max,
         week_min=week_min, week_max=week_max, game_type=game_type,
+        total_min=total_min, total_max=total_max,
     )
 
     # Phase 3: wrap DB calls in try/except.  If the DB file is missing,
@@ -167,16 +191,20 @@ def run_trend(db_path: str, spread_min: float, spread_max: float,
     #   away_margin = -result  (flip the home margin)
     #   away_spread = -home_spread
     #   ats_value   = -result + (-home_spread)
+    # ATS counters
     covers = 0
     pushes = 0
     no_covers = 0
+    # Phase 7: O/U counters — computed alongside ATS in the same loop.
+    overs = 0
+    unders = 0
+    ou_pushes = 0
 
     for g in matched:
+        # --- ATS classification (unchanged from Phase 6b) ---
         if team and g["away_team"] == team:
-            # AWAY perspective: flip margin and spread.
             ats_value = -g["result"] + (-g["home_spread"])
         else:
-            # HOME perspective (default).
             ats_value = g["result"] + g["home_spread"]
 
         if ats_value > 0:
@@ -186,9 +214,26 @@ def run_trend(db_path: str, spread_min: float, spread_max: float,
         else:
             no_covers += 1
 
-    # --- Step C: Compute hit rate (pushes excluded per contract) ---
-    denominator = covers + no_covers
-    hit_rate = (covers / denominator) if denominator > 0 else 0.0
+        # --- O/U classification (Phase 7) ---
+        # actual_total = the real combined score of the game.
+        # ou_value = how much the actual total exceeds the line.
+        #   positive → over, zero → push, negative → under.
+        actual_total = g["home_score"] + g["away_score"]
+        ou_value = actual_total - g["total_line"]
+
+        if ou_value > 0:
+            overs += 1
+        elif ou_value == 0:
+            ou_pushes += 1
+        else:
+            unders += 1
+
+    # --- Step C: Compute rates (pushes excluded per contract) ---
+    ats_denom = covers + no_covers
+    hit_rate = (covers / ats_denom) if ats_denom > 0 else 0.0
+
+    ou_denom = overs + unders
+    ou_rate = (overs / ou_denom) if ou_denom > 0 else 0.0
 
     # --- Step D: Build last_10 ---
     # Same slice as Phase 1.  ORDER BY id in the SQL ensures rows are in
@@ -198,9 +243,15 @@ def run_trend(db_path: str, spread_min: float, spread_max: float,
 
     return {
         "n": len(matched),
+        # ATS stats
         "covers": covers,
         "pushes": pushes,
         "no_covers": no_covers,
-        "hit_rate": round(hit_rate, 4),  # 4 decimal places for display
+        "hit_rate": round(hit_rate, 4),
+        # Phase 7: O/U stats
+        "overs": overs,
+        "unders": unders,
+        "ou_pushes": ou_pushes,
+        "ou_rate": round(ou_rate, 4),
         "last_10": last_10,
     }

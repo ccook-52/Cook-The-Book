@@ -10,7 +10,7 @@ Claude must follow this strictly unless explicitly told otherwise.
 
 Cook-The-Book is:
 
-A multi-filter trend evaluation engine for NFL spread betting.
+A multi-filter trend evaluation engine for NFL spread and over/under betting.
 
 It is NOT:
 - A data ingestion platform
@@ -27,11 +27,11 @@ It is intentionally small and foundational.
 
 Data flow (locked, do not regress):
 
-CSV (disk)
-→ import_games.py (run once, standalone script)
+nflreadpy (Phase 7, primary)  OR  CSV on disk (fallback)
+→ refresh_data.py (primary) or import_games.py (fallback)
 → games table in data/ctb.db
 → sqlite3 query via run_trend(db_path, spread_min, spread_max, **optional_filters)
-→ JSON response
+→ JSON response (ATS + O/U stats)
 → Client-side render
 
 The app does not load CSV at startup.
@@ -125,7 +125,30 @@ Phase 6 expanded CTB from a one-trick tool into a multi-filter trend engine:
 
 ---
 
-# Rule Contract (Spread Trends Only)
+# Established: Data Pipeline + Over/Under (Phase 7 — Complete)
+
+Phase 7 automated data ingestion and added over/under analysis:
+
+Data pipeline:
+- nflreadpy replaces manual CSV downloads (pip install nflreadpy)
+- refresh_data.py: fetches from nflverse → filters played games → imports to SQLite
+- import_games.py kept as fallback if nflverse is down
+- requirements.txt updated: flask, gunicorn, nflreadpy
+
+Over/under:
+- trend_runner.py computes O/U alongside ATS in the same loop
+  - actual_total = home_score + away_score
+  - ou_value = actual_total - total_line
+  - ou_value > 0 → over, == 0 → push, < 0 → under
+  - ou_rate = overs / (overs + unders), pushes excluded
+- total_line range added as optional filter (total_min + total_max)
+- app.py validates total_min/total_max (both or neither, min <= max)
+- index.html: total line dropdown in Advanced Filters, O/U stats + O/U column in last_10
+- Regression verified: spread -10 to -3 → n=3370, hit_rate=0.478, ou_rate=0.4991
+
+---
+
+# Rule Contract
 
 Sign convention:
 
@@ -165,6 +188,23 @@ if ats_value < 0 → no_cover
 hit_rate = covers / (covers + no_covers)
 
 Pushes are excluded from hit_rate.
+
+---
+
+# O/U Math Contract (Phase 7)
+
+actual_total = home_score + away_score
+ou_value = actual_total - total_line
+
+if ou_value > 0 → over
+if ou_value == 0 → push
+if ou_value < 0 → under
+
+ou_rate = overs / (overs + unders)
+
+Pushes are excluded from ou_rate.
+
+O/U is independent of ATS — both are computed for every query.
 
 ---
 
@@ -210,12 +250,13 @@ This is a learning-first build.
 
 # Data Ingestion Boundary
 
-Data gathering (nflverse, scripts, ETL) is separate.
+Data gathering is separate from the runtime application.
 
-The application consumes CSV.
-It does not fetch or sync external data.
+Phase 7: refresh_data.py uses nflreadpy to fetch data from nflverse.
+This is a standalone script — NOT imported into the Flask app.
+The Flask app only reads from ctb.db. It never fetches external data.
 
-Ingestion scripts may exist in /scripts but are not imported into the runtime app.
+import_games.py (CSV → SQLite) is kept as a fallback.
 
 ---
 
