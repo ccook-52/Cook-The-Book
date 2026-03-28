@@ -39,7 +39,12 @@ DB_PATH = os.path.join(SCRIPT_DIR, "data", "ctb.db")
 # without deleting ctb.db, it won't crash — it'll skip table creation
 # and try to insert (which may cause duplicate rows, so delete first).
 #
-# Phase 6: added game_type column ("REG" or "POST") for playoff filtering.
+# Phase 6: added game_type column for playoff filtering.
+# Phase 6b: added result (home margin) and total_line (over/under line).
+#   result = home_score - away_score.  Already computed in the CSV — we import
+#   it directly instead of recomputing in Python.
+#   total_line = the sportsbook over/under line (e.g. 44.5).  Imported now so
+#   the column exists when we're ready to build over/under filtering later.
 CREATE_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS games (
     id          INTEGER PRIMARY KEY,
@@ -50,16 +55,18 @@ CREATE TABLE IF NOT EXISTS games (
     away_team   TEXT    NOT NULL,
     home_score  INTEGER NOT NULL,
     away_score  INTEGER NOT NULL,
-    home_spread REAL    NOT NULL
+    home_spread REAL    NOT NULL,
+    result      INTEGER NOT NULL,
+    total_line  REAL    NOT NULL
 );
 """
 
-# Parameterized INSERT — the 8 '?' placeholders map to the 8 non-id columns.
+# Parameterized INSERT — the 10 '?' placeholders map to the 10 non-id columns.
 # We don't provide 'id' because SQLite auto-assigns it (1, 2, 3, ...).
 # NEVER use f-strings here — '?' protects against SQL injection.
 INSERT_SQL = """
-INSERT INTO games (season, week, game_type, home_team, away_team, home_score, away_score, home_spread)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+INSERT INTO games (season, week, game_type, home_team, away_team, home_score, away_score, home_spread, result, total_line)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 """
 
 
@@ -94,17 +101,21 @@ def main():
             conn.execute(INSERT_SQL, (
                 int(row["season"]),
                 int(row["week"]),
-                # Phase 6: game_type is "REG" or "POST" in nflverse.
-                # We store it as-is — no transformation needed.
+                # Phase 6: game_type is REG, WC, DIV, CON, or SB in nflverse.
                 row["game_type"].strip(),
                 row["home_team"].strip(),
                 row["away_team"].strip(),
                 int(row["home_score"]),
                 int(row["away_score"]),
-                # SIGN FLIP — same as Phase 1's load_games().
-                # nflverse spread_line is the AWAY team's line.
+                # SIGN FLIP — nflverse spread_line is the AWAY team's line.
                 # Negate to get home perspective: -4.5 away → +4.5 home.
                 -float(row["spread_line"]),
+                # Phase 6b: result = home margin (home_score - away_score).
+                # Already computed in the CSV — import directly.
+                int(row["result"]),
+                # Phase 6b: total_line = sportsbook over/under line.
+                # Imported now so it's ready when we build O/U filtering.
+                float(row["total_line"]),
             ))
             count += 1
 

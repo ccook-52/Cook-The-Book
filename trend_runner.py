@@ -35,10 +35,12 @@ import sqlite3
 # All USER-PROVIDED VALUES go through ? placeholders — never concatenated.
 # This prevents SQL injection.
 
-# Columns we SELECT — Phase 6 adds game_type to the output.
+# Columns we SELECT — Phase 6 adds game_type, Phase 6b adds result + total_line.
+# result = home_score - away_score (imported from CSV, not computed at runtime).
+# total_line = sportsbook over/under line (available for future O/U filtering).
 _COLUMNS = (
     "season, week, game_type, home_team, away_team, "
-    "home_score, away_score, home_spread"
+    "home_score, away_score, home_spread, result, total_line"
 )
 
 
@@ -154,32 +156,28 @@ def run_trend(db_path: str, spread_min: float, spread_max: float,
         raise RuntimeError(f"Database error: {e}") from e
 
     # --- Step B: Classify each matched game ---
-    # Phase 6: ATS math now accounts for perspective.
-    # If a team filter is active and the team is the AWAY team in a game,
-    # we flip the math to evaluate from the away team's perspective.
+    # Phase 6: ATS math accounts for perspective.
+    # Phase 6b: uses the `result` column (home margin) from the DB
+    # instead of computing home_score - away_score in Python.
     #
-    # Without team filter (or team is home): standard home perspective.
-    #   home_margin = home_score - away_score
-    #   ats_value   = home_margin + home_spread
+    # Home perspective (default):
+    #   ats_value = result + home_spread
     #
-    # With team filter and team is away: flipped perspective.
-    #   away_margin = away_score - home_score      (= -home_margin)
-    #   away_spread = -home_spread                 (if home is -7, away is +7)
-    #   ats_value   = away_margin + away_spread    (= -(home_margin + home_spread))
+    # Away perspective (team filter, team is away):
+    #   away_margin = -result  (flip the home margin)
+    #   away_spread = -home_spread
+    #   ats_value   = -result + (-home_spread)
     covers = 0
     pushes = 0
     no_covers = 0
 
     for g in matched:
         if team and g["away_team"] == team:
-            # AWAY perspective: the selected team was the away team.
-            # Flip both margin and spread to evaluate from their side.
-            margin = g["away_score"] - g["home_score"]
-            ats_value = margin + (-g["home_spread"])
+            # AWAY perspective: flip margin and spread.
+            ats_value = -g["result"] + (-g["home_spread"])
         else:
-            # HOME perspective (default): same math as Phase 1-5.
-            margin = g["home_score"] - g["away_score"]
-            ats_value = margin + g["home_spread"]
+            # HOME perspective (default).
+            ats_value = g["result"] + g["home_spread"]
 
         if ats_value > 0:
             covers += 1

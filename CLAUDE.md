@@ -38,7 +38,7 @@ The app does not load CSV at startup.
 The app does not hold a GAMES list in RAM.
 All game queries go through sqlite3. No ORM. No SQLAlchemy.
 
-games table schema (Phase 6 — expanded):
+games table schema (Phase 6b — expanded):
   id          INTEGER PRIMARY KEY
   season      INTEGER NOT NULL
   week        INTEGER NOT NULL
@@ -48,6 +48,8 @@ games table schema (Phase 6 — expanded):
   home_score  INTEGER NOT NULL
   away_score  INTEGER NOT NULL
   home_spread REAL    NOT NULL   ← negative when home favored
+  result      INTEGER NOT NULL   ← home margin (home_score - away_score)
+  total_line  REAL    NOT NULL   ← sportsbook over/under line
 
 ---
 
