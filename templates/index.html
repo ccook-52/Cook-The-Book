@@ -44,6 +44,46 @@
     table { border-collapse: collapse; width: 100%; margin-top: 8px; }
     th, td { border: 1px solid #999; padding: 4px 8px; text-align: center; }
     th { background: #eee; }
+
+    /*
+      Phase 8: Summary card — a human-readable sentence above the stats.
+      Left border accent makes it visually distinct from the raw numbers.
+    */
+    .summary-card {
+      background: #f0f4f8;
+      border-left: 4px solid #333;
+      padding: 12px 16px;
+      margin: 16px 0 8px 0;
+      border-radius: 0 4px 4px 0;
+      font-size: 1.05em;
+      line-height: 1.4;
+    }
+
+    /*
+      Phase 8: Color coding for hit rates.
+      At standard -110 juice, 52.4% is the breakeven threshold.
+      Green = profitable edge, red = losing edge, gray = breakeven or no data.
+    */
+    .rate-positive { color: #16a34a; font-weight: bold; }
+    .rate-negative { color: #dc2626; font-weight: bold; }
+    .rate-neutral  { color: #666;    font-weight: bold; }
+
+    /*
+      Phase 8: Loading spinner — pure CSS, no external images or libraries.
+      A spinning circle using border tricks and CSS animation.
+    */
+    .spinner {
+      display: inline-block;
+      width: 32px;
+      height: 32px;
+      border: 3px solid #ccc;
+      border-top-color: #333;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
   </style>
 </head>
 <body>
@@ -144,6 +184,12 @@
 
     <button type="submit">Run Trend</button>
   </form>
+
+  <!-- Phase 8: Loading spinner — visible during fetch, hidden when results render -->
+  <div id="spinner" style="display:none; text-align:center; padding:24px;">
+    <div class="spinner"></div>
+    <p>Running trend...</p>
+  </div>
 
   <!-- Results appear here after the fetch call -->
   <div id="results"></div>
@@ -271,6 +317,21 @@
     })();
 
     // -----------------------------------------------------------------------
+    // Phase 8: RATE COLOR CODING
+    // -----------------------------------------------------------------------
+    // At standard -110 juice, you need to win 52.4% of bets to break even.
+    // This helper returns a CSS class name based on whether a rate beats
+    // that threshold.  Green = edge, red = losing, gray = no data.
+    const BREAKEVEN = 0.524;
+
+    function rateClass(rate, denominator) {
+      if (denominator === 0) return "rate-neutral";
+      if (rate > BREAKEVEN) return "rate-positive";
+      if (rate < BREAKEVEN) return "rate-negative";
+      return "rate-neutral";  // exactly breakeven
+    }
+
+    // -----------------------------------------------------------------------
     // FORM SUBMISSION — uses fetch() to POST JSON, no page reload
     // -----------------------------------------------------------------------
     document.getElementById("trend-form").addEventListener("submit", async (e) => {
@@ -305,90 +366,273 @@
       if (totalMin) body.total_min = parseFloat(totalMin);
       if (totalMax) body.total_max = parseFloat(totalMax);
 
-      const res = await fetch("/api/run-trend", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body)
-      });
+      // Phase 8: Show spinner, clear previous results before fetch.
+      document.getElementById("results").innerHTML = "";
+      document.getElementById("spinner").style.display = "block";
 
-      const data = await res.json();
+      try {
+        const res = await fetch("/api/run-trend", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body)
+        });
 
-      if (data.error) {
-        document.getElementById("results").innerHTML =
-          "<p style='color:red;'>" + data.error + "</p>";
-        return;
-      }
+        const data = await res.json();
 
-      // -----------------------------------------------------------------------
-      // RENDER RESULTS — ATS + O/U stats, intentionally plain HTML
-      // -----------------------------------------------------------------------
-      let html = "<h2>Results</h2>";
-      html += "<p><strong>Matching games (n):</strong> " + data.n + "</p>";
-
-      // ATS summary
-      html += "<h3>ATS (Against The Spread)</h3>";
-      html += "<ul>";
-      html += "<li><strong>Covers:</strong> " + data.covers + "</li>";
-      html += "<li><strong>Pushes:</strong> " + data.pushes + "</li>";
-      html += "<li><strong>No Covers:</strong> " + data.no_covers + "</li>";
-      html += "<li><strong>Hit Rate:</strong> " + (data.hit_rate * 100).toFixed(1) + "%</li>";
-      html += "</ul>";
-
-      // Phase 7: O/U summary
-      html += "<h3>O/U (Over/Under)</h3>";
-      html += "<ul>";
-      html += "<li><strong>Overs:</strong> " + data.overs + "</li>";
-      html += "<li><strong>Unders:</strong> " + data.unders + "</li>";
-      html += "<li><strong>Pushes:</strong> " + data.ou_pushes + "</li>";
-      html += "<li><strong>Over Rate:</strong> " + (data.ou_rate * 100).toFixed(1) + "%</li>";
-      html += "</ul>";
-
-      // Last 10 table — now includes Total and O/U columns
-      if (data.last_10.length > 0) {
-        html += "<h3>Last 10 Matches</h3>";
-        html += "<table>";
-        html += "<tr><th>Season</th><th>Wk</th><th>Type</th><th>Home</th><th>Away</th>"
-              + "<th>Score</th><th>Spread</th><th>ATS</th>"
-              + "<th>Total</th><th>O/U</th></tr>";
-
-        for (const g of data.last_10) {
-          // ATS result — accounts for team perspective (Phase 6).
-          let ats;
-          if (team && g.away_team === team) {
-            ats = -g.result + (-g.home_spread);
-          } else {
-            ats = g.result + g.home_spread;
-          }
-          let atsLabel = "NO COVER";
-          if (ats > 0) atsLabel = "COVER";
-          else if (ats === 0) atsLabel = "PUSH";
-
-          // Phase 7: O/U result for this game.
-          // actual_total = combined score, ou_value = how much it exceeded the line.
-          const actualTotal = g.home_score + g.away_score;
-          const ouValue = actualTotal - g.total_line;
-          let ouLabel = "UNDER";
-          if (ouValue > 0) ouLabel = "OVER";
-          else if (ouValue === 0) ouLabel = "PUSH";
-
-          html += "<tr>"
-                + "<td>" + g.season + "</td>"
-                + "<td>" + g.week + "</td>"
-                + "<td>" + g.game_type + "</td>"
-                + "<td>" + g.home_team + "</td>"
-                + "<td>" + g.away_team + "</td>"
-                + "<td>" + g.home_score + "-" + g.away_score + "</td>"
-                + "<td>" + g.home_spread + "</td>"
-                + "<td>" + atsLabel + "</td>"
-                + "<td>" + g.total_line + "</td>"
-                + "<td>" + ouLabel + "</td>"
-                + "</tr>";
+        if (data.error) {
+          // Phase 8 XSS fix: use textContent instead of innerHTML.
+          // Server error messages can include user input (e.g. "Invalid team: XYZ"),
+          // so innerHTML would allow reflected XSS.  textContent is safe — it
+          // renders everything as plain text, never as HTML.
+          const errP = document.createElement("p");
+          errP.style.color = "red";
+          errP.textContent = data.error;
+          document.getElementById("results").innerHTML = "";
+          document.getElementById("results").appendChild(errP);
+          return;
         }
-        html += "</table>";
+
+        // ---------------------------------------------------------------------
+        // RENDER RESULTS — ATS + O/U stats, intentionally plain HTML
+        // ---------------------------------------------------------------------
+        let html = "<h2>Results</h2>";
+
+        // Phase 8: Summary card — translates the query into plain English.
+        // This makes shared links self-documenting: the recipient immediately
+        // understands what they're looking at without reading raw numbers.
+        let summary = "";
+
+        // Convert signed spread range to betting language.
+        // Negative spread = home favored.  Positive = home underdog.
+        if (spreadMax < 0) {
+          // Entire range is negative → home favorites.
+          // Show as "3 to 10 pts" (positive, ascending) because that's how
+          // bettors talk: "a 3-to-10-point favorite", not "-10 to -3".
+          summary = "Home favorites of " + Math.abs(spreadMax) + " to " + Math.abs(spreadMin) + " pts";
+        } else if (spreadMin > 0) {
+          // Entire range is positive → home underdogs.
+          summary = "Home underdogs of " + spreadMin + " to " + spreadMax + " pts";
+        } else {
+          // Range crosses zero → mixed / pick'em territory.
+          summary = "Spread range " + spreadMin + " to " + spreadMax;
+        }
+
+        // Append active optional filters in plain English.
+        if (team) summary += ", " + team + " games";
+        if (seasonMin && seasonMax) {
+          summary += ", " + seasonMin + "\u2013" + seasonMax + " seasons";
+        }
+        if (weekMin && weekMax) {
+          summary += ", weeks " + weekMin + "\u2013" + weekMax;
+        }
+        if (gameType) {
+          const typeLabels = {
+            REG: "regular season", WC: "Wild Card", DIV: "Divisional",
+            CON: "Conference Championship", SB: "Super Bowl"
+          };
+          summary += ", " + (typeLabels[gameType] || gameType) + " only";
+        }
+        if (totalMin && totalMax) {
+          summary += ", total line " + totalMin + "\u2013" + totalMax;
+        }
+
+        // Punchline: the hit rate and sample size.
+        const atsClass = rateClass(data.hit_rate, data.covers + data.no_covers);
+        summary += " \u2014 cover <span class='" + atsClass + "'>"
+                 + (data.hit_rate * 100).toFixed(1) + "%</span> ATS"
+                 + " (" + data.n + " games)";
+
+        html += '<div class="summary-card">' + summary + '</div>';
+
+        html += "<p><strong>Matching games (n):</strong> " + data.n + "</p>";
+
+        // ATS summary — Phase 8: hit rate is now color-coded.
+        html += "<h3>ATS (Against The Spread)</h3>";
+        html += "<ul>";
+        html += "<li><strong>Covers:</strong> " + data.covers + "</li>";
+        html += "<li><strong>Pushes:</strong> " + data.pushes + "</li>";
+        html += "<li><strong>No Covers:</strong> " + data.no_covers + "</li>";
+        html += "<li><strong>Hit Rate:</strong> <span class='" + atsClass + "'>"
+              + (data.hit_rate * 100).toFixed(1) + "%</span></li>";
+        html += "</ul>";
+
+        // Phase 7: O/U summary — Phase 8: over rate is now color-coded.
+        const ouClass = rateClass(data.ou_rate, data.overs + data.unders);
+        html += "<h3>O/U (Over/Under)</h3>";
+        html += "<ul>";
+        html += "<li><strong>Overs:</strong> " + data.overs + "</li>";
+        html += "<li><strong>Unders:</strong> " + data.unders + "</li>";
+        html += "<li><strong>Pushes:</strong> " + data.ou_pushes + "</li>";
+        html += "<li><strong>Over Rate:</strong> <span class='" + ouClass + "'>"
+              + (data.ou_rate * 100).toFixed(1) + "%</span></li>";
+        html += "</ul>";
+
+        // Last 10 table — now includes Total and O/U columns
+        if (data.last_10.length > 0) {
+          html += "<h3>Last 10 Matches</h3>";
+          html += "<table>";
+          html += "<tr><th>Season</th><th>Wk</th><th>Type</th><th>Home</th><th>Away</th>"
+                + "<th>Score</th><th>Spread</th><th>ATS</th>"
+                + "<th>Total</th><th>O/U</th></tr>";
+
+          for (const g of data.last_10) {
+            // ATS result — accounts for team perspective (Phase 6).
+            let ats;
+            if (team && g.away_team === team) {
+              ats = -g.result + (-g.home_spread);
+            } else {
+              ats = g.result + g.home_spread;
+            }
+            let atsLabel = "NO COVER";
+            if (ats > 0) atsLabel = "COVER";
+            else if (ats === 0) atsLabel = "PUSH";
+
+            // Phase 7: O/U result for this game.
+            // actual_total = combined score, ou_value = how much it exceeded the line.
+            const actualTotal = g.home_score + g.away_score;
+            const ouValue = actualTotal - g.total_line;
+            let ouLabel = "UNDER";
+            if (ouValue > 0) ouLabel = "OVER";
+            else if (ouValue === 0) ouLabel = "PUSH";
+
+            html += "<tr>"
+                  + "<td>" + g.season + "</td>"
+                  + "<td>" + g.week + "</td>"
+                  + "<td>" + g.game_type + "</td>"
+                  + "<td>" + g.home_team + "</td>"
+                  + "<td>" + g.away_team + "</td>"
+                  + "<td>" + g.home_score + "-" + g.away_score + "</td>"
+                  + "<td>" + g.home_spread + "</td>"
+                  + "<td>" + atsLabel + "</td>"
+                  + "<td>" + g.total_line + "</td>"
+                  + "<td>" + ouLabel + "</td>"
+                  + "</tr>";
+          }
+          html += "</table>";
+        }
+
+        document.getElementById("results").innerHTML = html;
+
+        // -----------------------------------------------------------------
+        // Phase 8: Update URL with current filter values (shareable link).
+        // -----------------------------------------------------------------
+        // history.replaceState() changes the URL in the address bar WITHOUT
+        // reloading the page or adding a history entry.  This means:
+        //   1. Users can copy the URL to share or bookmark their query.
+        //   2. The Back button still works normally (no history pollution).
+        //
+        // We use replaceState (not pushState) so running 10 queries doesn't
+        // create 10 Back-button entries.  Back always leaves CTB entirely.
+        const urlParams = new URLSearchParams();
+        urlParams.set("spread_min", spreadMin);
+        urlParams.set("spread_max", spreadMax);
+
+        // Only include optional params if they have a value.
+        if (team) urlParams.set("team", team);
+        if (seasonMin) urlParams.set("season_min", seasonMin);
+        if (seasonMax) urlParams.set("season_max", seasonMax);
+        if (weekMin) urlParams.set("week_min", weekMin);
+        if (weekMax) urlParams.set("week_max", weekMax);
+        if (gameType) urlParams.set("game_type", gameType);
+        if (totalMin) urlParams.set("total_min", totalMin);
+        if (totalMax) urlParams.set("total_max", totalMax);
+
+        // Always include auto=1 so shared links auto-run for the recipient.
+        urlParams.set("auto", "1");
+
+        history.replaceState(null, "", "?" + urlParams.toString());
+
+      } catch (err) {
+        // Phase 8: Handle network errors (server unreachable, timeout, etc.).
+        // Previously, a failed fetch() was silently swallowed — the user saw
+        // nothing.  Now they get a clear error message.
+        const errP = document.createElement("p");
+        errP.style.color = "red";
+        errP.textContent = "Network error. Please try again.";
+        document.getElementById("results").innerHTML = "";
+        document.getElementById("results").appendChild(errP);
+      } finally {
+        // Phase 8: Always hide spinner, whether success or error.
+        document.getElementById("spinner").style.display = "none";
+      }
+    });
+
+    // -----------------------------------------------------------------------
+    // Phase 8: SHAREABLE QUERY LINKS — read URL params on page load
+    // -----------------------------------------------------------------------
+    //
+    // When someone visits a URL like:
+    //   https://cookthebook.net/?spread_min=-10&spread_max=-3&team=KC
+    //
+    // This function reads those params and pre-populates the form dropdowns.
+    //
+    // SECURITY: We only set values on <select> elements, which have a fixed
+    // set of <option> children.  Setting .value to something that doesn't
+    // match an existing <option> is a no-op — the browser ignores it silently.
+    // This means arbitrary strings in URL params CANNOT inject HTML or JS.
+    // Example: ?team=<script>alert(1)<\/script> → team dropdown stays on "Any".
+
+    function readUrlParams() {
+      const params = new URLSearchParams(window.location.search);
+
+      // If there are no query params at all, nothing to do.
+      if (params.toString() === "") return;
+
+      // Helper: set a <select> value from a URL param.
+      // If the param doesn't exist or doesn't match any <option>, the
+      // dropdown stays at its current value.  No DOM injection possible.
+      function setSelectFromParam(selectId, paramName) {
+        const val = params.get(paramName);
+        if (val !== null) {
+          const sel = document.getElementById(selectId);
+          sel.value = val;
+          // .value assignment on a <select> is inherently safe: if val
+          // doesn't match any <option>.value, the browser ignores it.
+        }
       }
 
-      document.getElementById("results").innerHTML = html;
-    });
+      // Required: spread range
+      setSelectFromParam("spread-min", "spread_min");
+      setSelectFromParam("spread-max", "spread_max");
+
+      // Optional: advanced filters
+      setSelectFromParam("team", "team");
+      setSelectFromParam("season-min", "season_min");
+      setSelectFromParam("season-max", "season_max");
+      setSelectFromParam("week-min", "week_min");
+      setSelectFromParam("week-max", "week_max");
+      setSelectFromParam("game-type", "game_type");
+      setSelectFromParam("total-min", "total_min");
+      setSelectFromParam("total-max", "total_max");
+
+      // If any advanced filter param is set, auto-open the panel so the
+      // user can see what's pre-populated (not hidden behind the toggle).
+      const advancedParams = [
+        "team", "season_min", "season_max", "week_min",
+        "week_max", "game_type", "total_min", "total_max"
+      ];
+      const hasAdvanced = advancedParams.some(function(p) {
+        return params.get(p);
+      });
+      if (hasAdvanced) {
+        const panel = document.getElementById("advanced-filters");
+        if (!panel.classList.contains("open")) {
+          toggleAdvanced();
+        }
+      }
+
+      // Auto-run: if ?auto=1 is in the URL, trigger form submission.
+      // This makes shared links "live" — the recipient sees results
+      // immediately without having to click Run.
+      if (params.get("auto") === "1") {
+        document.getElementById("trend-form").dispatchEvent(
+          new Event("submit", { cancelable: true })
+        );
+      }
+    }
+
+    // Call after all dropdowns are populated.
+    readUrlParams();
   </script>
 </body>
 </html>

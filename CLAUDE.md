@@ -148,6 +148,42 @@ Over/under:
 
 ---
 
+# Established: UI Polish & Shareable Links (Phase 8 — Complete)
+
+Phase 8 added usability polish and a stateless sharing mechanism:
+
+Shareable query links:
+- URL params encode the current filter combo (e.g. ?spread_min=-10&spread_max=-3&team=KC&auto=1)
+- Param names match JSON body field names: spread_min, spread_max, team, season_min, season_max, week_min, week_max, game_type, total_min, total_max, auto
+- On page load: readUrlParams() reads URL, pre-populates <select> dropdowns
+- If any advanced filter param is set, the Advanced Filters panel auto-opens
+- If ?auto=1 is present, the query auto-runs on page load
+- After each query: history.replaceState() updates the URL bar (no history pollution)
+- Stateless: no database, no cookies, no localStorage — state lives in the URL
+
+Summary card:
+- Human-readable sentence above stats (e.g. "Home favorites of 3 to 10 pts — cover 47.8% ATS (3370 games)")
+- Translates signed spreads to betting language, appends active filters in plain English
+
+Color coding:
+- Hit rates above 52.4% (breakeven at -110 juice) shown in green
+- Hit rates below 52.4% shown in red
+- Applied to both ATS hit rate and O/U over rate
+
+Loading spinner:
+- Pure CSS spinner shown during fetch, hidden on success or error
+- Network errors now caught and displayed (previously swallowed silently)
+
+Security model:
+- URL params assigned to <select>.value — non-matching values silently ignored by the browser (inherent sanitizer)
+- No URL param value is ever inserted via innerHTML
+- Error messages switched from innerHTML to textContent (XSS fix)
+- Server-side validation unchanged: VALID_TEAMS, VALID_GAME_TYPES, parameterized SQL
+- No new endpoints, no new Python code, no new dependencies
+- Zero changes to app.py, trend_runner.py, or any Python file
+
+---
+
 # Rule Contract
 
 Sign convention:
@@ -262,17 +298,45 @@ import_games.py (CSV → SQLite) is kept as a fallback.
 
 # Teaching Mode
 
-Claude should:
-- Explain why code exists
-- Explain tradeoffs
-- Identify hidden assumptions
-- Call out scope creep
-- Challenge architecture violations
+Claude is a mentor, not a code generator.
 
-Claude should not:
-- Overbuild
-- Add future phases into current phase
-- Mix ingestion and runtime layers
+Claude IS used for:
+- Explaining code line by line
+- Challenging architectural decisions
+- Identifying scalability risks
+- Suggesting refactors
+- Explaining infrastructure concepts
+- Reviewing database schema design
+- Helping clarify confusion
+- Explaining tradeoffs
+- Identifying hidden assumptions
+- Calling out scope creep
+- Challenging architecture violations
+
+Claude is NOT used for:
+- Writing the full app
+- Designing everything automatically
+- Making structural decisions without my input
+- Replacing thinking
+- Overbuilding
+- Adding future phases into current phase
+- Mixing ingestion and runtime layers
+
+How I should prompt Claude:
+
+Instead of "Build me this feature," use:
+- "Explain why this works."
+- "Challenge this design."
+- "What would break at scale?"
+- "Is this separation clean?"
+- "How would a production app handle this?"
+
+Rule: If I cannot explain the code in my own words, I do not move to the next phase.
+
+Before advancing to a new phase:
+- I can explain the core concepts without looking.
+- I can describe tradeoffs.
+- I understand why I made each architectural decision.
 
 ---
 
