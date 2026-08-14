@@ -1,0 +1,58 @@
+# Cook-The-Book — Phase 9: CD pipeline
+#
+# What this replaces: the manual ritual of
+#   git push → open terminal → ssh into Lightsail → git pull → restart ctb
+# The COMMANDS are identical. Only WHO performs them changes.
+
+name: Deploy to Lightsail
+
+# TRIGGER — the event subscription.
+# Fires ONLY on pushes to master. Pull requests, other branches, and tags
+# do not match this filter, so they never deploy.
+on:
+  push:
+    branches: [master]
+
+jobs:
+  # JOB — one named unit of work, on one runner. CTB needs exactly one.
+  deploy:
+    # RUNNER — a fresh, throwaway Ubuntu VM in GitHub's cloud.
+    # This is NOT the Lightsail server. It exists for ~30 seconds,
+    # runs the steps below, and is destroyed.
+    runs-on: ubuntu-latest
+
+    steps:
+      # STEP 1 — open an SSH shell on Lightsail and run the deploy commands.
+      # `uses:` = a pre-built action. appleboy/ssh-action handles the SSH
+      # connection ceremony (key file, host keys) so we don't script it by hand.
+      #
+      # The ${{ secrets.* }} values are injected by GitHub at runtime.
+      # They are encrypted at rest, never appear in this file or in logs.
+      - name: Pull latest code and restart ctb
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.LIGHTSAIL_HOST }}        # 44.218.123.69
+          username: ${{ secrets.LIGHTSAIL_USER }}    # ubuntu
+          key: ${{ secrets.LIGHTSAIL_SSH_KEY }}      # contents of the .pem file
+          # These commands execute ON LIGHTSAIL, inside the SSH session —
+          # not on the runner. Lightsail pulls from github.com itself;
+          # the code never passes through the runner.
+          script: |
+            cd ~/Cook-The-Book_v0.1
+            git pull origin master
+            sudo systemctl restart ctb
+
+      # STEP 2 — smoke test, executed ON THE RUNNER (`run:` = shell command
+      # on the runner). Hitting the public HTTPS URL exercises the whole
+      # chain from outside: DNS → TLS → Nginx → Gunicorn → Flask.
+      #
+      # sleep 5: systemctl restart returns before Gunicorn workers finish
+      # booting. Curling instantly can catch a 502 from Nginx and report a
+      # false failure. Five seconds is enough for two workers to come up.
+      #
+      # curl -s (quiet) -f (non-2xx → non-zero exit → step fails → red X)
+      # grep -q checks the BODY says ok, not just that something answered.
+      - name: Health check
+        run: |
+          sleep 5
+          curl -sf https://cookthebook.net/health | grep -q '"status": "ok"'
