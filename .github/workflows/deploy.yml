@@ -52,7 +52,9 @@ jobs:
       #
       # curl -s (quiet) -f (non-2xx → non-zero exit → step fails → red X)
       # grep -q checks the BODY says ok, not just that something answered.
+      # NOTE: Flask's jsonify emits compact JSON — no space after the colon.
+      # Run #1 attempt 2 failed on exactly that: grep expected '"status": "ok"'.
       - name: Health check
         run: |
           sleep 5
-          curl -sf https://cookthebook.net/health | grep -q '"status": "ok"'
+          curl -sf https://cookthebook.net/health | grep -q '"status":"ok"'
